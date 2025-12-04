@@ -133,34 +133,76 @@ class Simulator:
         """
         Execute the full simulation and return metrics.
         
-        The simulation proceeds by:
-        1. Scheduling all request arrivals as events
-        2. Processing events in time order
-        3. When worker is free and queue non-empty, form and execute batch
-        4. Continue until all requests are processed
+        Uses a simplified event-driven approach:
+        1. Process arrivals in order
+        2. When worker is free and queue has requests, try to batch
+        3. Execute batch and advance clock
         
         Returns:
             SimulationMetrics with aggregate statistics
         """
-        self._initialize_events()
+        # Convert requests to arrival events
+        arrivals = [(r.arrival_time, r) for r in self.requests]
+        arrivals.sort(key=lambda x: x[0])
+        arrival_idx = 0
         
-        while self._events or not self.queue.is_empty:
-            # Process all events up to current time or next event
-            self._process_pending_events()
+        self.clock = 0.0
+        worker_free_at = 0.0
+        
+        while arrival_idx < len(arrivals) or not self.queue.is_empty:
+            # Add all requests that have arrived by current time
+            while arrival_idx < len(arrivals) and arrivals[arrival_idx][0] <= self.clock:
+                self.queue.enqueue(arrivals[arrival_idx][1])
+                arrival_idx += 1
             
-            # Try to schedule work if worker is free
-            if not self._worker_busy and not self.queue.is_empty:
-                self._try_schedule_batch()
+            # If worker is busy, advance to when it's free
+            if self.clock < worker_free_at:
+                self.clock = worker_free_at
+                continue
             
-            # If worker is busy and events remain, advance to next event
-            if self._events and self._worker_busy:
-                next_event = heapq.heappop(self._events)
-                self.clock = next_event.time
-                self._handle_event(next_event)
-            elif self._worker_busy:
-                # No more arrival events, just wait for batch to complete
-                self.clock = self._worker_free_time
-                self._worker_busy = False
+            # Try to form and execute a batch
+            if not self.queue.is_empty:
+                batch = self.scheduler.get_next_batch(self.queue, self.clock)
+                
+                if batch is not None:
+                    # Execute batch
+                    execution_time = get_total_batch_time(batch.batch_size)
+                    
+                    for request in batch.requests:
+                        request.start_time = self.clock
+                        request.end_time = self.clock + execution_time
+                        self.completed_requests.append(request)
+                    
+                    self.batch_sizes.append(batch.batch_size)
+                    worker_free_at = self.clock + execution_time
+                    self.clock = worker_free_at
+                    continue
+            
+            # No batch formed - advance time to next interesting point
+            next_times = []
+            
+            # Next arrival
+            if arrival_idx < len(arrivals):
+                next_times.append(arrivals[arrival_idx][0])
+            
+            # For static scheduler with requests waiting, advance past timeout
+            if not self.queue.is_empty and hasattr(self.scheduler, 'timeout'):
+                # Get scheduler's batch start time if tracking
+                batch_start = getattr(self.scheduler, '_batch_start_time', None)
+                if batch_start is not None:
+                    timeout_time = batch_start + self.scheduler.timeout
+                    # Only advance if timeout is in the future
+                    if timeout_time > self.clock:
+                        next_times.append(timeout_time)
+                    else:
+                        # Timeout already passed but no batch - advance slightly
+                        next_times.append(self.clock + 0.001)
+            
+            if next_times:
+                new_clock = max(min(next_times), self.clock + 0.0001)  # Always advance
+                self.clock = new_clock
+            else:
+                break
         
         return self._compute_metrics()
     
@@ -312,14 +354,119 @@ def run_simulation(
     return sim.run()
 
 
+def _run_single_experiment(args: tuple) -> tuple:
+    """
+    Worker function for parallel experiment execution.
+    
+    Args:
+        args: Tuple of (scheduler_type, scheduler_kwargs, rps, duration, seed)
+        
+    Returns:
+        Tuple of (scheduler_name, rps, metrics)
+    """
+    scheduler_type, scheduler_kwargs, scheduler_name, rps, duration, seed = args
+    
+    # Recreate scheduler in worker process (can't pickle scheduler objects easily)
+    from simulator.scheduler import create_scheduler
+    scheduler = create_scheduler(scheduler_type, **scheduler_kwargs)
+    
+    metrics = run_simulation(
+        scheduler=scheduler,
+        rps=rps,
+        duration=duration,
+        seed=seed
+    )
+    return (scheduler_name, rps, metrics)
+
+
 def compare_schedulers(
+    schedulers: List[Scheduler],
+    rps_range: List[float],
+    duration: float = 30.0,
+    seed: int = 42,
+    parallel: bool = True,
+    max_workers: Optional[int] = None
+) -> Dict[str, Dict[float, SimulationMetrics]]:
+    """
+    Compare multiple schedulers across different load levels.
+    
+    Uses multiprocessing to run experiments in parallel for significant
+    speedup on multi-core systems.
+    
+    Args:
+        schedulers: List of schedulers to compare
+        rps_range: List of RPS values to test
+        duration: Simulation duration per experiment
+        seed: Base random seed (incremented for each RPS level)
+        parallel: Whether to use parallel execution (default: True)
+        max_workers: Max parallel workers (default: CPU count)
+        
+    Returns:
+        Nested dict: {scheduler_name: {rps: metrics}}
+    """
+    # Build list of experiment configurations
+    experiments = []
+    for scheduler in schedulers:
+        # Extract scheduler type and kwargs for recreation in worker
+        if 'Static' in scheduler.name:
+            sched_type = 'static'
+            sched_kwargs = {
+                'target_batch_size': getattr(scheduler, 'target_batch_size', 8),
+                'timeout': getattr(scheduler, 'timeout', 0.1),
+                'max_batch_size': getattr(scheduler, 'max_batch_size', 32),
+            }
+        else:
+            sched_type = 'dynamic'
+            sched_kwargs = {
+                'max_batch_size': getattr(scheduler, 'max_batch_size', 32),
+                'min_batch_size': getattr(scheduler, 'min_batch_size', 1),
+            }
+        
+        for rps in rps_range:
+            experiments.append((
+                sched_type,
+                sched_kwargs,
+                scheduler.name,
+                rps,
+                duration,
+                seed + int(rps * 100)
+            ))
+    
+    results: Dict[str, Dict[float, SimulationMetrics]] = {}
+    for scheduler in schedulers:
+        results[scheduler.name] = {}
+    
+    if parallel and len(experiments) > 1:
+        # Parallel execution using ProcessPoolExecutor
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        import os
+        
+        n_workers = max_workers or min(os.cpu_count() or 4, len(experiments))
+        
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futures = {executor.submit(_run_single_experiment, exp): exp 
+                      for exp in experiments}
+            
+            for future in as_completed(futures):
+                scheduler_name, rps, metrics = future.result()
+                results[scheduler_name][rps] = metrics
+    else:
+        # Sequential execution (for debugging or single experiment)
+        for exp in experiments:
+            scheduler_name, rps, metrics = _run_single_experiment(exp)
+            results[scheduler_name][rps] = metrics
+    
+    return results
+
+
+def compare_schedulers_sequential(
     schedulers: List[Scheduler],
     rps_range: List[float],
     duration: float = 30.0,
     seed: int = 42
 ) -> Dict[str, Dict[float, SimulationMetrics]]:
     """
-    Compare multiple schedulers across different load levels.
+    Sequential version of compare_schedulers (for debugging).
     
     Args:
         schedulers: List of schedulers to compare
@@ -330,20 +477,11 @@ def compare_schedulers(
     Returns:
         Nested dict: {scheduler_name: {rps: metrics}}
     """
-    results: Dict[str, Dict[float, SimulationMetrics]] = {}
-    
-    for scheduler in schedulers:
-        results[scheduler.name] = {}
-        
-        for rps in rps_range:
-            # Use consistent seed per RPS level across schedulers
-            metrics = run_simulation(
-                scheduler=scheduler,
-                rps=rps,
-                duration=duration,
-                seed=seed + int(rps * 100)
-            )
-            results[scheduler.name][rps] = metrics
-    
-    return results
+    return compare_schedulers(
+        schedulers=schedulers,
+        rps_range=rps_range,
+        duration=duration,
+        seed=seed,
+        parallel=False
+    )
 

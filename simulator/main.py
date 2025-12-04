@@ -17,7 +17,7 @@ Expected Results:
 """
 
 import sys
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 
 from simulator.scheduler import StaticBatchScheduler, DynamicBatchScheduler, Scheduler
 from simulator.simulator import run_simulation, SimulationMetrics, compare_schedulers
@@ -100,7 +100,9 @@ def run_experiments(
     rps_range: List[float],
     duration: float = 30.0,
     seed: int = 42,
-    verbose: bool = True
+    verbose: bool = True,
+    parallel: bool = True,
+    max_workers: Optional[int] = None
 ) -> Dict[str, Dict[float, SimulationMetrics]]:
     """
     Run the full experiment suite.
@@ -110,10 +112,15 @@ def run_experiments(
         duration: Simulation duration per experiment
         seed: Random seed for reproducibility
         verbose: Whether to print detailed output
+        parallel: Use multiprocessing for speedup
+        max_workers: Number of parallel workers (default: CPU count)
         
     Returns:
         Results dictionary
     """
+    import os
+    import time
+    
     # Create schedulers
     static_scheduler = StaticBatchScheduler(
         target_batch_size=DEFAULT_TARGET_BATCH,
@@ -122,6 +129,7 @@ def run_experiments(
     dynamic_scheduler = DynamicBatchScheduler()
     
     schedulers = [static_scheduler, dynamic_scheduler]
+    n_experiments = len(schedulers) * len(rps_range)
     
     if verbose:
         print_header("dLLM Serving Simulator")
@@ -130,30 +138,103 @@ def run_experiments(
         print("enabling aggressive batching without memory constraints.")
         print(f"\nSimulation: {duration}s duration, seed={seed}")
         print(f"RPS range: {rps_range}")
+        print(f"Total experiments: {n_experiments}")
+        
+        if parallel:
+            n_workers = max_workers or min(os.cpu_count() or 4, n_experiments)
+            print(f"Parallel execution: {n_workers} workers")
+        else:
+            print("Sequential execution (use --parallel for speedup)")
     
     # Run comparisons
     if verbose:
         print("\nRunning simulations...")
     
+    start_time = time.time()
+    
     results = compare_schedulers(
         schedulers=schedulers,
         rps_range=rps_range,
         duration=duration,
-        seed=seed
+        seed=seed,
+        parallel=parallel,
+        max_workers=max_workers
     )
+    
+    elapsed = time.time() - start_time
+    if verbose:
+        print(f"Completed in {elapsed:.1f}s ({n_experiments / elapsed:.1f} experiments/sec)")
     
     return results
 
 
 def main() -> None:
-    """Main entry point."""
-    # Configuration
-    rps_range = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
-    duration = 30.0  # 30 seconds per experiment
-    seed = 42
+    """Main entry point with CLI argument parsing."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="dLLM Trace-Driven Simulator for scheduling policy comparison"
+    )
+    parser.add_argument(
+        "--duration", "-d", type=float, default=30.0,
+        help="Simulation duration in seconds (default: 30.0)"
+    )
+    parser.add_argument(
+        "--rps-min", type=float, default=1.0,
+        help="Minimum RPS to test (default: 1.0)"
+    )
+    parser.add_argument(
+        "--rps-max", type=float, default=10.0,
+        help="Maximum RPS to test (default: 10.0)"
+    )
+    parser.add_argument(
+        "--rps-step", type=float, default=1.0,
+        help="RPS increment (default: 1.0)"
+    )
+    parser.add_argument(
+        "--seed", "-s", type=int, default=42,
+        help="Random seed (default: 42)"
+    )
+    parser.add_argument(
+        "--no-parallel", action="store_true",
+        help="Disable parallel execution"
+    )
+    parser.add_argument(
+        "--workers", "-w", type=int, default=None,
+        help="Number of parallel workers (default: CPU count)"
+    )
+    parser.add_argument(
+        "--quick", "-q", action="store_true",
+        help="Quick mode: shorter duration (5s), fewer RPS points"
+    )
+    parser.add_argument(
+        "--no-details", action="store_true",
+        help="Skip detailed per-RPS output"
+    )
+    
+    args = parser.parse_args()
+    
+    # Build RPS range
+    if args.quick:
+        rps_range = [1.0, 3.0, 5.0, 7.0, 10.0]
+        duration = 5.0
+    else:
+        rps_range = []
+        rps = args.rps_min
+        while rps <= args.rps_max + 0.001:  # Small epsilon for float comparison
+            rps_range.append(rps)
+            rps += args.rps_step
+        duration = args.duration
     
     # Run experiments
-    results = run_experiments(rps_range, duration, seed, verbose=True)
+    results = run_experiments(
+        rps_range=rps_range,
+        duration=duration,
+        seed=args.seed,
+        verbose=True,
+        parallel=not args.no_parallel,
+        max_workers=args.workers
+    )
     
     # Get scheduler names for printing
     scheduler_names = list(results.keys())
@@ -164,8 +245,9 @@ def main() -> None:
     print_header("Average Latency (seconds) by RPS")
     print_table(results, rps_range)
     
-    # Print detailed results
-    print_detailed_results(results, rps_range)
+    # Print detailed results (optional)
+    if not args.no_details:
+        print_detailed_results(results, rps_range)
     
     # Print improvement summary
     calculate_improvement(results, baseline_name, proposed_name, rps_range)
