@@ -254,7 +254,7 @@ def main() -> None:
     
     print("\n" + "=" * 70)
     print(" Simulation Complete!")
-    print(" Run 'python -m simulator.plotter' to generate visualizations.")
+    print(" Run 'python -m simulator.plotter' to generate visualizations in results/")
     print("=" * 70 + "\n")
 
 

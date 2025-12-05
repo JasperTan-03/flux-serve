@@ -363,7 +363,7 @@ def plot_improvement_heatmap(
 def generate_all_plots(
     results: Optional[Dict[str, Dict[float, SimulationMetrics]]] = None,
     rps_range: Optional[List[float]] = None,
-    output_dir: str = ".",
+    output_dir: str = "results",
     show: bool = False
 ) -> None:
     """
@@ -422,8 +422,28 @@ def generate_all_plots(
 
 
 def main() -> None:
-    """Main entry point for plotting."""
-    generate_all_plots(output_dir=".", show=False)
+    """Main entry point for plotting with CLI arguments."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="Generate visualization plots for dLLM scheduler comparison"
+    )
+    parser.add_argument(
+        "--output-dir", "-o", type=str, default="results",
+        help="Directory to save plots (default: results)"
+    )
+    parser.add_argument(
+        "--show", action="store_true",
+        help="Display plots interactively"
+    )
+    parser.add_argument(
+        "--duration", "-d", type=float, default=30.0,
+        help="Simulation duration in seconds (default: 30.0)"
+    )
+    
+    args = parser.parse_args()
+    
+    generate_all_plots(output_dir=args.output_dir, show=args.show)
 
 
 if __name__ == "__main__":
