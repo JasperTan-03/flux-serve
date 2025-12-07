@@ -103,10 +103,17 @@ def plot_latency_comparison(
     ax.set_ylim(bottom=0)
     
     # Add annotation explaining the insight
+    # Use data points from the actual rps_range to avoid KeyError
+    # Point to a high-load RPS value (around 70% through the range) where benefits are visible
+    annotation_idx = int(len(rps_range) * 0.7)
+    annotation_rps = rps_range[annotation_idx]
+    text_idx = int(len(rps_range) * 0.5)
+    text_rps = rps_range[text_idx]
+    
     ax.annotate(
         'Dynamic batching exploits\nsub-linear latency scaling',
-        xy=(7, results[scheduler_names[1]][7.0].avg_latency),
-        xytext=(8.5, results[scheduler_names[0]][5.0].avg_latency),
+        xy=(annotation_rps, results[scheduler_names[1]][annotation_rps].avg_latency),
+        xytext=(max(rps_range) + 0.5, results[scheduler_names[0]][text_rps].avg_latency),
         fontsize=9,
         arrowprops=dict(arrowstyle='->', color='gray', lw=1.5),
         bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='gray', alpha=0.8)
