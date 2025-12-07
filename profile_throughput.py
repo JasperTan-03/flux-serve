@@ -1,15 +1,22 @@
 import time
 import torch
+import os
 import pynvml
 import matplotlib.pyplot as plt
 from transformers import AutoModel, AutoTokenizer
+
+# Set HuggingFace cache to /work directory to avoid home quota issues on TACC
+hf_cache_dir = os.environ.get('HF_HOME', '/work/09889/jaspertan03/.cache/huggingface')
+os.environ['HF_HOME'] = hf_cache_dir
+os.makedirs(hf_cache_dir, exist_ok=True)
+print(f"Using HuggingFace cache directory: {hf_cache_dir}")
 
 # --- Setup ---
 pynvml.nvmlInit()
 handle = pynvml.nvmlDeviceGetHandleByIndex(0) 
 
 model_id = 'GSAI-ML/LLaDA-8B-Instruct'
-model = AutoModel.from_pretrained(model_id, trust_remote_code=True, torch_dtype=torch.bfloat16).cuda()
+model = AutoModel.from_pretrained(model_id, trust_remote_code=True, torch_dtype=torch.bfloat16, cache_dir=hf_cache_dir).cuda()
 model.eval()
 
 # --- The Experiment: Batch Size Scaling ---

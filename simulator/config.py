@@ -22,12 +22,12 @@ import bisect
 # double latency, indicating compute-bound behavior we can exploit.
 
 PROFILING_DATA: Dict[int, float] = {
-    1: 0.0250,   # Batch 1:  25.0ms per step
-    2: 0.0331,   # Batch 2:  33.1ms per step (1.32x latency for 2x batch)
-    4: 0.0577,   # Batch 4:  57.7ms per step (1.74x latency for 2x batch)
-    8: 0.1130,   # Batch 8:  113.0ms per step (1.96x latency for 2x batch)
-    16: 0.2132,  # Batch 16: 213.2ms per step (1.89x latency for 2x batch)
-    32: 0.4013,  # Batch 32: 401.3ms per step (1.88x latency for 2x batch)
+    1: 0.0245,   # Batch 1:  24.5ms per step (measured 2025-12-07)
+    2: 0.0321,   # Batch 2:  32.1ms per step (1.31x latency for 2x batch)
+    4: 0.0566,   # Batch 4:  56.6ms per step (1.76x latency for 2x batch)
+    8: 0.1105,   # Batch 8:  110.5ms per step (1.95x latency for 2x batch)
+    16: 0.2880,  # Batch 16: 288.0ms per step (2.60x latency for 2x batch)
+    32: 0.3946,  # Batch 32: 394.6ms per step (1.37x latency for 2x batch)
 }
 
 # Sorted batch sizes for interpolation
