@@ -38,3 +38,30 @@ python -m simulator.plotter
 
 # Custom output directory
 python -m simulator.plotter --output-dir /path/to/custom/folder
+```
+
+## Advanced Experiments
+
+### Burst Stress Test
+Demonstrates how schedulers react to sudden traffic spikes:
+- **Calm period** (0-20s): 1 RPS
+- **Burst period** (20-40s): 8 RPS  
+- **Recovery period** (40-60s): 1 RPS
+
+```bash
+python -m experiments.burst
+```
+
+**Output**: `results/burst_timeline.png`, `results/burst_phase_comparison.png`
+
+### Timeout Sensitivity Sweep
+Proves that static batching is hard to tune - no single timeout works for all loads:
+
+```bash
+python -m experiments.sensitivity
+
+# With custom duration
+python -m experiments.sensitivity --duration 30
+```
+
+**Output**: `results/timeout_sensitivity.png`, `results/timeout_winners.png`, `results/timeout_regret.png`

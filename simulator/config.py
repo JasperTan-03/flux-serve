@@ -45,7 +45,7 @@ MAX_BATCH_SIZE: int = 32
 NUM_STEPS: int = 20
 """Fixed number of diffusion steps per request (dLLMs don't vary this)."""
 
-DEFAULT_TIMEOUT: float = 0.1
+DEFAULT_TIMEOUT: float = 1.0
 """Default timeout (seconds) for static batching scheduler."""
 
 DEFAULT_TARGET_BATCH: int = 8
